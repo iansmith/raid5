@@ -98,14 +98,14 @@ func TestCreateFile(t *testing.T) {
 
 }
 
-func runTestOverSomeContentFiles(p1, p2, parity string, fn func(*testing.T,int,*os.File)) {
-	for which, expectedPath := range []{p1,p2,parity} {
+func runTestOverSomeContentFiles(t *testing.T, p1, p2, parity string, fn func(*testing.T, int, *os.File)) {
+	for which, expectedPath := range []string{p1, p2, parity} {
 		fp, err := os.Open(expectedPath)
 		if err != nil {
 			t.Fatalf("failed to open expected file %s : %v", expectedPath, err)
 		}
 		defer fp.Close()
-		fn(t,which,fp)
+		fn(t, which, fp)
 	}
 }
 
@@ -139,14 +139,7 @@ func TestNiceSizedWrite(t *testing.T) {
 		t.Fatalf("could not close the raid5 file: %v", err)
 	}
 
-	//read the files from the filesystem via the go primitives since this
-	//is a test of the raid5 level code
-	expected := []string{
-		filepath.Join(d1, name),
-		filepath.Join(d2, name),
-		filepath.Join(parity, name),
-	}
-
+	//setup the test functions
 	testPred := []func(*testing.T, byte, int) bool{
 		//first half
 		func(t *testing.T, b byte, i int) bool {
@@ -177,7 +170,7 @@ func TestNiceSizedWrite(t *testing.T) {
 		},
 	}
 
-	runTestOverSomeContentFiles(
+	runTestOverSomeContentFiles(t,
 		filepath.Join(d1, name),
 		filepath.Join(d2, name),
 		filepath.Join(parity, name),
@@ -207,7 +200,6 @@ func TestNiceSizedWrite(t *testing.T) {
 				}
 			}
 		})
-
 
 }
 
@@ -294,39 +286,41 @@ func TestPaddingContent(t *testing.T) {
 		t.Fatalf("close failed: %v", err)
 	}
 
-	runTestOverSomeContentFiles(
+	runTestOverSomeContentFiles(t,
 		filepath.Join(d1, name),
 		filepath.Join(d2, name),
 		filepath.Join(parity, name),
 		func(t *testing.T, which int, fp *os.File) {
 			buffer := make([]byte, HALF_BLOCK)
-			n, err:=fp.Read(buffer)
-			if n!=HALF_BLOCK || err!=nil {
-				t.Fatalf("failed to read block in test: %v %v", n==HALF_BLOCK, err)
+			n, err := fp.Read(buffer)
+			if n != HALF_BLOCK || err != nil {
+				t.Fatalf("failed to read block in test: %v %v", n == HALF_BLOCK, err)
 			}
-			start:=0
-			switch (which){
+			start := 0
+			switch which {
 			case 0:
-				if buffer[0]!=content[0] {
-					t.Errorf("unexpected byte 0 in section %d: %x vs %x",which, content[0],buffer[0])
+				if buffer[0] != content[0] {
+					t.Errorf("unexpected byte 0 in section %d: %x vs %x", which, content[0], buffer[0])
 				}
 				start = 1
 				fallthrough
 			case 1:
-				for i:=start; i<HALF_BLOCK;i++ {
-					if buffer[i]!=0x00 {
+				for i := start; i < HALF_BLOCK; i++ {
+					if buffer[i] != 0x00 {
 						t.Errorf("didn't find zero padding at %d", i)
+						break
 					}
 				}
 			case 2:
-				if buffer[0]!=xorValue {
+				if buffer[0] != xorValue {
 					t.Errorf("wrong xor value found! expected %x but got %x", xorValue, buffer[0])
 				}
-				for i:=1; i<HALF_BLOCK; i++ {
-					if buffer[i]!=0xff {
-						t.Errorf("didn't find the xor value", ...)
+				for i := 1; i < HALF_BLOCK; i++ {
+					if buffer[i] != byte(0)^byte(0) {
+						t.Errorf("didn't find the xor padding value at position %d %x", i, buffer[i])
+						break
 					}
 				}
 			}
-			})
+		})
 }
