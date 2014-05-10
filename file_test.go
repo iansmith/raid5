@@ -8,6 +8,10 @@ import (
 	"testing"
 )
 
+const (
+	SPOT_CHECKS = 5
+)
+
 func setupTestDirs(t *testing.T) (string, string, string) {
 	data1, err := ioutil.TempDir("", "raid5")
 	if err != nil {
@@ -94,6 +98,17 @@ func TestCreateFile(t *testing.T) {
 
 }
 
+func runTestOverSomeContentFiles(p1, p2, parity string, fn func(*testing.T,int,*os.File)) {
+	for which, expectedPath := range []{p1,p2,parity} {
+		fp, err := os.Open(expectedPath)
+		if err != nil {
+			t.Fatalf("failed to open expected file %s : %v", expectedPath, err)
+		}
+		defer fp.Close()
+		fn(t,which,fp)
+	}
+}
+
 func TestNiceSizedWrite(t *testing.T) {
 	d1, d2, parity := setupTestDirs(t)
 	defer destroyTestDirs(t, d1, d2, parity)
@@ -161,38 +176,39 @@ func TestNiceSizedWrite(t *testing.T) {
 			return true
 		},
 	}
-	for which, expectedPath := range expected {
-		fp, err := os.Open(expectedPath)
-		if err != nil {
-			t.Fatalf("failed to open expected file %s : %v", expectedPath, err)
-		}
-		defer fp.Close()
 
-		info, err := fp.Stat()
-		if err != nil {
-			t.Fatalf("failed to stat: %v", err)
-		}
-
-		//three files * half block size = 50% overhead (MEETS SPEC!)
-		if info.Size() != HALF_BLOCK {
-			t.Errorf("wrong number of bytes written, expected %d but got %d", HALF_BLOCK, info.Size())
-		}
-
-		//this depends on the writing code writing the first half in
-		//f1 and the second half in f2 rather than interleaving
-		buffer := make([]byte, HALF_BLOCK)
-		n, err := fp.Read(buffer)
-		if err != nil || n != HALF_BLOCK {
-			t.Fatalf("could not read first data blob: (%v) %v", n == HALF_BLOCK, err)
-		}
-		//test the bytes
-		for i, b := range buffer {
-			if !testPred[which](t, b, i) {
-				t.Logf("failed on byte %d of section %d", i, which)
-				break //no sense reporting a bunch of errors
+	runTestOverSomeContentFiles(
+		filepath.Join(d1, name),
+		filepath.Join(d2, name),
+		filepath.Join(parity, name),
+		func(t *testing.T, which int, fp *os.File) {
+			info, err := fp.Stat()
+			if err != nil {
+				t.Fatalf("failed to stat: %v", err)
 			}
-		}
-	}
+
+			//three files * half block size = 50% overhead (MEETS SPEC!)
+			if info.Size() != HALF_BLOCK {
+				t.Errorf("wrong number of bytes written, expected %d but got %d", HALF_BLOCK, info.Size())
+			}
+
+			//this depends on the writing code putting the first half in
+			//f1 and the second half in f2 rather than interleaving
+			buffer := make([]byte, HALF_BLOCK)
+			n, err := fp.Read(buffer)
+			if err != nil || n != HALF_BLOCK {
+				t.Fatalf("could not read first data blob: (%v) %v", n == HALF_BLOCK, err)
+			}
+			//test the bytes
+			for i, b := range buffer {
+				if !testPred[which](t, b, i) {
+					t.Logf("failed on byte %d of section %d", i, which)
+					break //no sense reporting a bunch of errors
+				}
+			}
+		})
+
+
 }
 
 func TestUglySizedWrite(t *testing.T) {
@@ -224,7 +240,7 @@ func TestUglySizedWrite(t *testing.T) {
 	for i, _ := range testData {
 		testData[i] = make([]byte, sizes_to_test[i])
 		for j, _ := range testData[i] {
-			testData[i][j] = byte(j % 0x7f) //never set the high bit
+			testData[i][j] = 0 //doesn't matter, will never be on disk
 		}
 	}
 
@@ -249,4 +265,68 @@ func TestUglySizedWrite(t *testing.T) {
 		}
 	}
 
+	if err := raid5.Close(); err != nil {
+		t.Fatalf("failed to close the raid5 data: %v", err)
+	}
+
+	//no data was written to disk due to stubbing!
+}
+
+func TestPaddingContent(t *testing.T) {
+	d1, d2, parity := setupTestDirs(t)
+	defer destroyTestDirs(t, d1, d2, parity)
+
+	name := "heffalumph"
+	result, err := CreateFile(d1, d2, parity, name)
+	if err != nil {
+		t.Fatalf("failed to create files: %v", err)
+	}
+
+	//one byte of content, one byte of interesting xor
+	content := []byte{byte(rand.Intn(127))}
+	xorValue := byte(0) ^ content[0]
+
+	//go through the api to create the content
+	if err := result.Write(content); err != nil {
+		t.Fatalf("write failed: %v", err)
+	}
+	if err := result.Close(); err != nil {
+		t.Fatalf("close failed: %v", err)
+	}
+
+	runTestOverSomeContentFiles(
+		filepath.Join(d1, name),
+		filepath.Join(d2, name),
+		filepath.Join(parity, name),
+		func(t *testing.T, which int, fp *os.File) {
+			buffer := make([]byte, HALF_BLOCK)
+			n, err:=fp.Read(buffer)
+			if n!=HALF_BLOCK || err!=nil {
+				t.Fatalf("failed to read block in test: %v %v", n==HALF_BLOCK, err)
+			}
+			start:=0
+			switch (which){
+			case 0:
+				if buffer[0]!=content[0] {
+					t.Errorf("unexpected byte 0 in section %d: %x vs %x",which, content[0],buffer[0])
+				}
+				start = 1
+				fallthrough
+			case 1:
+				for i:=start; i<HALF_BLOCK;i++ {
+					if buffer[i]!=0x00 {
+						t.Errorf("didn't find zero padding at %d", i)
+					}
+				}
+			case 2:
+				if buffer[0]!=xorValue {
+					t.Errorf("wrong xor value found! expected %x but got %x", xorValue, buffer[0])
+				}
+				for i:=1; i<HALF_BLOCK; i++ {
+					if buffer[i]!=0xff {
+						t.Errorf("didn't find the xor value", ...)
+					}
+				}
+			}
+			})
 }

@@ -24,3 +24,5 @@
 * 10:25 found a third stupid bug (< instead of > )
 * half hour break for shower, take dog out, start laundry
 * 10:55 realized in shower that need to store the length of the files in the name (easier than putting it in the content)
+* 11:04 got third test passing, added git for safety
+* 11:12 wrote a half a content test in the wrong place, wasted time
