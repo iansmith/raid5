@@ -38,3 +38,21 @@ to be a single logical operation
 important in this simple example plus if there *is* a collision you
 could actually get fancy because you know the file contents are the
 same (due to hash)
+* 12:41 now about to do the actual read with parity magic
+* 12:50 don't want to be too aggressive about aborting if the directories get out of sync because that's actually a case we want to handle
+* 12:55 zero size files end up NOT symlinking and computing a hash, which
+makes sense but isn't regular
+* 13:08 IMPROVEMENT NEEDED: Should make symlinks atomic in WriteAndClose
+* 13:09 IMPROVEMENT NEEDED: Voting on errors in file creation?
+* 13:10, Ok finally getting to actually doing reading
+* 13:11 decided that open and read should be unified... then changed my mind because it makes the ReadFile method ugly
+* 14:05, Massive bug found in the writing implementation
+* 14:08 need to add a test for zero sized files specifically
+* 14:18 wasn't a big bug, just an encoding issue (%x vs %d)
+* 14:20 trying to deal with even/odd issues in the size of the buffer and
+the offset makes me think I did something stupid
+* 14:33 again, worrying that the len(foo) is an int not int64
+* 15:07 took a break to hang with wife/dog
+* 15:42 spent a bunch of time debugging something which boiled downed to "if you haven't written the code yet, it won't work"
+
+

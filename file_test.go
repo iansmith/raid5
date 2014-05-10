@@ -31,12 +31,14 @@ func setupTestDirs(t *testing.T) (string, string, string) {
 }
 
 func destroyTestDirs(t *testing.T, data1, data2, parity string) {
-	for _, dir := range []string{data1, data2, parity} {
-		err := os.RemoveAll(dir)
-		if err != nil {
-			t.Fatalf("failed to remove dir %s: %v", dir, err)
+	/*
+		for _, dir := range []string{data1, data2, parity} {
+			err := os.RemoveAll(dir)
+			if err != nil {
+				t.Fatalf("failed to remove dir %s: %v", dir, err)
+			}
 		}
-	}
+	*/
 }
 
 func TestCreateFile(t *testing.T) {
@@ -253,7 +255,8 @@ func TestUglySizedWrite(t *testing.T) {
 		}
 
 		countCalls = 0
-		l, _, err := raid5.Write(data)
+		//NOT GOING THROUGH THE API! not using real writer
+		l, _, err := raid5.writer(data)
 		if err != nil {
 			t.Fatalf("unable to write the data blob: %v", err)
 		}
@@ -288,15 +291,12 @@ func TestPaddingContent(t *testing.T) {
 	xorValue := byte(0) ^ content[0]
 
 	//go through the api to create the content
-	l, _, err := result.Write(content)
+	l, _, err := result.WriteAndClose(content)
 	if err != nil {
 		t.Fatalf("write failed: %v", err)
 	}
 	if l != 1 {
 		t.Errorf("wrong size, expecetd 1 but got: %d", l)
-	}
-	if err := result.Close(); err != nil {
-		t.Fatalf("close failed: %v", err)
 	}
 
 	runTestOverSomeContentFiles(t,
@@ -393,10 +393,86 @@ func TestEncodeValues(t *testing.T) {
 	if pieces[0] != "fleazil" {
 		t.Errorf("wrong name encoded %s", encoded)
 	}
-	if pieces[1] != fmt.Sprintf("%x", fakeLen) {
+	if pieces[1] != fmt.Sprintf("%d", fakeLen) {
 		t.Errorf("wrong len encoded %s", encoded)
 	}
 	if pieces[2] != "000102030405060708090a0b0c0d0e0f" {
 		t.Errorf("wrong hash encoded %s", encoded)
 	}
+}
+
+func TestCantCreateFileTwice(t *testing.T) {
+	d1, d2, parity := setupTestDirs(t)
+	defer destroyTestDirs(t, d1, d2, parity)
+
+	name := "fartastic"
+	result, err := CreateFile(d1, d2, parity, name)
+	if err != nil {
+		t.Fatalf("failed to create files: %v", err)
+	}
+
+	if err := result.Close(); err != nil {
+		t.Fatalf("failed to close file first file: %v", err)
+	}
+
+	result, err = CreateFile(d1, d2, parity, name)
+	if result != nil {
+		t.Errorf("Bad return value from CreateFile!")
+	}
+	if !os.IsExist(err) {
+		t.Errorf("Bad return value from CreateFile: %v", err)
+	}
+
+}
+
+func TestCanReadFileAfterDelete(t *testing.T) {
+	size := rand.Intn(64)*0xffff + rand.Intn(64) //approx 2^12
+	buffer := make([]byte, size)
+	compare := make([]byte, size)
+
+	for i, _ := range buffer {
+		buffer[i] = byte(rand.Intn(256))
+	}
+
+	d1, d2, parity := setupTestDirs(t)
+	defer destroyTestDirs(t, d1, d2, parity)
+
+	name := "blue_monday"
+	result, err := CreateFile(d1, d2, parity, name)
+	if err != nil {
+		t.Fatalf("failed to create files: %v", err)
+	}
+
+	_, _, err = result.WriteAndClose(buffer)
+	if err != nil {
+		t.Fatalf("failed to write and close the file: %v", err)
+	}
+
+	deadPath := filepath.Join(d2, result.finalName)
+	if err := os.Remove(deadPath); err != nil {
+		t.Fatalf("could not delete file: %v", err)
+	}
+
+	result, err = Open(d1, d2, parity, name)
+	if err != nil {
+		t.Fatalf("can't find the file we just wrote: %s: %v", name, err)
+	}
+
+	n, err := result.ReadFile(compare, 0)
+	if n != int64(size) {
+		t.Errorf("failed trying to read after delete, expected %d but got %d bytes",
+			size, n)
+	}
+	if err != nil {
+		t.Errorf("failed trying to read after delete: %v", err)
+	}
+
+	//we have all the bytes
+	for i, _ := range buffer {
+		if buffer[i] != compare[i] {
+			t.Errorf("found mismatched bytes: %x vs %x at position %d", compare[i], buffer[i], i)
+			break
+		}
+	}
+
 }

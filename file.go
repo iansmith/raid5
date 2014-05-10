@@ -19,13 +19,17 @@ type raid5File struct {
 	//after a WriteAndClose() this holds the underlying FS name
 	finalName string
 
+	expectedLen  int64
+	expectedHash []byte
+
 	//support for overriding in tests
 	blockWriter func([]byte) error
 	writer      func([]byte) (int64, []byte, error)
 }
 
 var (
-	WRONG_SIZE_WRITE = errors.New("we are assuming that writes to a disk always write the full set of bytes")
+	WRONG_SIZE      = errors.New("we are assuming that writes to a disk always read/write the full set of bytes")
+	NOT_ENOUGH_DATA = errors.New("lost at least two of three parts of the file, can't recover")
 )
 
 const (
@@ -35,11 +39,31 @@ const (
 )
 
 //create a file. directories are "out of band" information not really
-//part of the public api
+//part of the public api.  note that this will return an error if the
+//file already exists.
 func CreateFile(dir1, dir2, parityDir, name string) (*raid5File, error) {
 	if BLOCK_SIZE%2 != 0 {
 		panic("bad block size! block size must be even!")
 	}
+
+	_, err1 := os.Open(filepath.Join(dir1, name))
+	_, err2 := os.Open(filepath.Join(dir2, name))
+	_, err3 := os.Open(filepath.Join(parityDir, name))
+
+	//should we be doing voting here?
+	if err1 == nil || err2 == nil || err3 == nil {
+		return nil, os.ErrExist
+	}
+
+	//should we be doing voting?
+	if err1 != nil || err2 != nil || err3 != nil {
+		if !os.IsNotExist(err1) || !os.IsNotExist(err2) || !os.IsNotExist(err3) {
+			return nil, err1 //maybe should panic?
+		}
+		//we continue because we WANT there to be the three not exist
+		//errors
+	}
+
 	f1, err := os.Create(filepath.Join(dir1, name))
 	if err != nil {
 		return nil, err
@@ -87,6 +111,7 @@ func (self *raid5File) writeSingleBlock(data []byte) error {
 	if len(data) != BLOCK_SIZE {
 		panic("unexpected size of block in WriteBlock!")
 	}
+
 	//compute parity via XOR
 	parity := make([]byte, HALF_BLOCK)
 	for i, _ := range parity {
@@ -108,7 +133,7 @@ func (self *raid5File) writeSingleBlock(data []byte) error {
 			if err != nil {
 				return err
 			}
-			return WRONG_SIZE_WRITE
+			return WRONG_SIZE
 		}
 	}
 	//everything is ok
@@ -122,7 +147,6 @@ func (self *raid5File) writeSingleBlock(data []byte) error {
 func (self *raid5File) write(data []byte) (int64, []byte, error) {
 	curr := 0
 	h := md5.New()
-	var mostRecent []byte
 
 	for curr < len(data) {
 		//can we write a whole block?
@@ -130,11 +154,11 @@ func (self *raid5File) write(data []byte) (int64, []byte, error) {
 			if err := self.blockWrite(data[curr : curr+BLOCK_SIZE]); err != nil {
 				return 0, nil, err
 			}
-			mostRecent = h.Sum(data[curr : curr+BLOCK_SIZE])
+			h.Write(data[curr : curr+BLOCK_SIZE])
 		} else {
 			//pad with zeros as necessary
 			padding := make([]byte, BLOCK_SIZE)
-			mostRecent = h.Sum(data[curr:]) //hash does not include zeros!
+			h.Write(data[curr:]) //hash does not include zeros!
 			for i := 0; i < BLOCK_SIZE; i++ {
 				//if statement not very satisfying as it avoids burstish
 				//writes of zeros but this is easier to reason about correctness
@@ -151,7 +175,7 @@ func (self *raid5File) write(data []byte) (int64, []byte, error) {
 		}
 		curr += BLOCK_SIZE
 	}
-	return int64(len(data)), mostRecent, nil
+	return int64(len(data)), h.Sum(nil), nil
 }
 
 //WriteAndClose defaults to calling the standard implementation, which is
@@ -164,7 +188,7 @@ func (self *raid5File) WriteAndClose(data []byte) (int64, []byte, error) {
 	if err := self.Close(); err != nil {
 		return 0, nil, err //is there something more useful to do here?
 	}
-	self.finalName = encodeMetadata(name, l, h)
+	self.finalName = encodeMetadata(self.startingName, l, h)
 	parentF1 := filepath.Dir(self.f1.Name())
 	parentF2 := filepath.Dir(self.f2.Name())
 	parentParity := filepath.Dir(self.parity.Name())
@@ -180,6 +204,16 @@ func (self *raid5File) WriteAndClose(data []byte) (int64, []byte, error) {
 		return 0, nil, err
 	}
 	if err := os.Rename(self.parity.Name(), filepath.Join(parentParity, self.finalName)); err != nil {
+		return 0, nil, err
+	}
+	//XXX NOT ATOMIC! CONCURRENCY PROBLEM!!
+	if err := os.Symlink(filepath.Join(parentF1, self.finalName), filepath.Join(parentF1, self.startingName)); err != nil {
+		return 0, nil, err
+	}
+	if err := os.Symlink(filepath.Join(parentF2, self.finalName), filepath.Join(parentF2, self.startingName)); err != nil {
+		return 0, nil, err
+	}
+	if err := os.Symlink(filepath.Join(parentParity, self.finalName), filepath.Join(parentParity, self.startingName)); err != nil {
 		return 0, nil, err
 	}
 	return l, h, nil
@@ -198,7 +232,7 @@ func encodeMetadata(name string, l int64, hash []byte) string {
 	if name == "" {
 		panic("empty filenames are nonsense")
 	}
-	return fmt.Sprintf("%s$%x$%x", name, l, hash)
+	return fmt.Sprintf("%s$%d$%x", name, l, hash)
 }
 
 //hide the length of the file and the md5hash in the name
@@ -223,4 +257,135 @@ func decodeMetadata(name string) (string, int64, []byte) {
 		h[i/2] = byte(b) //yes, this is safe
 	}
 	return pieces[0], l, h
+}
+
+func Open(d1, d2, parity, name string) (*raid5File, error) {
+	//try to open all three files
+	f1, err1 := os.Open(filepath.Join(d1, name))
+	f2, err2 := os.Open(filepath.Join(d2, name))
+	p, err3 := os.Open(filepath.Join(parity, name))
+
+	ct := 0
+	for _, err := range []error{err1, err2, err3} {
+		if err == nil {
+			ct++
+			continue
+		}
+		if os.IsNotExist(err) {
+			continue // we can maybe tolerate this
+		}
+		//not clear: is this an error? if the disk is failing, it seems
+		//like it is, so we error here
+		return nil, err
+	}
+	if ct < 2 {
+		return nil, NOT_ENOUGH_DATA
+	}
+	//figure out how long the file is and its expected hash, we can use
+	//one of the two parts
+	link := filepath.Join(d1, name)
+	if f1 == nil {
+		link = filepath.Join(d2, name)
+	}
+	dest, linkErr := os.Readlink(link)
+	if linkErr != nil {
+		info, err := os.Stat(link)
+		if err != nil {
+			return nil, err
+		}
+		if info.Size() != 0 {
+			return nil, linkErr
+		}
+		//zero sized file
+		return &raid5File{
+			f1:           f1,
+			f2:           f2,
+			parity:       p,
+			startingName: name,
+			finalName:    name,
+		}, nil
+
+	}
+	_, l, hsh := decodeMetadata(dest)
+
+	return &raid5File{
+		f1:           f1,
+		f2:           f2,
+		parity:       p,
+		startingName: name,
+		finalName:    dest,
+		expectedLen:  l,
+		expectedHash: hsh,
+	}, nil
+}
+
+func (self *raid5File) ReadFile(out []byte, offset int64) (int64, error) {
+
+	//setup r1 and r2
+	r1 := self.f1
+	r2 := self.f2
+	usingParity := false
+	if r1 == nil || r2 == nil {
+		usingParity = true
+		//we know that the additional file we need is in p
+		if r1 == nil {
+			r1 = self.parity
+		} else {
+			r2 = self.parity
+		}
+	}
+
+	//seek to the location requested
+	if _, err := r1.Seek(offset, 0); err != nil {
+		return 0, err
+	}
+	if _, err := r2.Seek(offset, 0); err != nil {
+		return 0, err
+	}
+
+	curr := 0
+	data1 := make([]byte, HALF_BLOCK)
+	data2 := make([]byte, HALF_BLOCK)
+
+	for curr < len(out) {
+		n1, err := r1.Read(data1)
+		if err != nil {
+			return 0, err
+		}
+		n2, err := r2.Read(data2)
+		if err != nil {
+			return 0, err
+		}
+		if n1 != len(data1) {
+			return 0, WRONG_SIZE
+		}
+		if n2 != len(data2) {
+			return 0, WRONG_SIZE
+		}
+		if usingParity {
+			for i := 0; i < HALF_BLOCK; i++ {
+				recovered := data1[i] ^ data2[i]
+				if self.f1 == nil {
+					data1[i] = recovered
+				} else {
+					data2[i] = recovered
+				}
+			}
+		}
+		//data is recovered if necessary, so copy it out
+		if int64(curr+HALF_BLOCK) > self.expectedLen {
+			copy(out[curr:], data1[:self.expectedLen-int64(curr)])
+		} else if int64(curr+BLOCK_SIZE) > self.expectedLen {
+			copy(out[curr:], data1)
+			copy(out[curr+HALF_BLOCK:], data2[:self.expectedLen-int64(curr+HALF_BLOCK)])
+		} else {
+			copy(out[curr:], data1)
+			copy(out[curr+HALF_BLOCK:], data2)
+		}
+
+		//jump a block
+		curr += BLOCK_SIZE
+	}
+
+	return self.expectedLen, nil
 }
