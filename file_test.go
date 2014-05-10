@@ -63,6 +63,10 @@ func TestCreateFile(t *testing.T) {
 			t.Fatalf("failed in writing a few bytes? %d!=%d", n, size)
 		}
 	}
+	//make sure starting name is ok
+	if result.startingName != name {
+		t.Fatalf("starting name was not set properly: %s", result.startingName)
+	}
 
 	//do the close so we are sure data is on the disk
 	err = result.Close()
@@ -296,9 +300,9 @@ func TestPaddingContent(t *testing.T) {
 	}
 
 	runTestOverSomeContentFiles(t,
-		filepath.Join(d1, name),
-		filepath.Join(d2, name),
-		filepath.Join(parity, name),
+		filepath.Join(d1, result.finalName),
+		filepath.Join(d2, result.finalName),
+		filepath.Join(parity, result.finalName),
 		func(t *testing.T, which int, fp *os.File) {
 			buffer := make([]byte, HALF_BLOCK)
 			n, err := fp.Read(buffer)

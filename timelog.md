@@ -32,3 +32,9 @@ encoding of the hash means we have to change the name of the file *after
 we have finished writing to it, ugh, ugly.
 * 12:07 on a 32 bit machine, the len() is probably only 32 bits wide! 
 this means we'd be limiting ourselves to 32 bit wide file sizes
+* 12:23 because of the way we are doing naming, we want WriteAndClose()
+to be a single logical operation
+* 12:27 WriteAndClose() isn't really atomic but that fact isn't really
+important in this simple example plus if there *is* a collision you
+could actually get fancy because you know the file contents are the
+same (due to hash)

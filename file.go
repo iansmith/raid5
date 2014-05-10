@@ -15,6 +15,10 @@ type raid5File struct {
 	f1, f2 *os.File
 	parity *os.File
 
+	startingName string
+	//after a WriteAndClose() this holds the underlying FS name
+	finalName string
+
 	//support for overriding in tests
 	blockWriter func([]byte) error
 	writer      func([]byte) (int64, []byte, error)
@@ -52,9 +56,10 @@ func CreateFile(dir1, dir2, parityDir, name string) (*raid5File, error) {
 		return nil, err
 	}
 	result := &raid5File{
-		f1:     f1,
-		f2:     f2,
-		parity: parity,
+		startingName: name,
+		f1:           f1,
+		f2:           f2,
+		parity:       parity,
 	}
 
 	result.writer = result.write
@@ -149,9 +154,35 @@ func (self *raid5File) write(data []byte) (int64, []byte, error) {
 	return int64(len(data)), mostRecent, nil
 }
 
-//write defaults to calling the standard implementation
-func (self *raid5File) Write(data []byte) (int64, []byte, error) {
-	return self.writer(data)
+//WriteAndClose defaults to calling the standard implementation, which is
+//just write.
+func (self *raid5File) WriteAndClose(data []byte) (int64, []byte, error) {
+	l, h, err := self.writer(data)
+	if err != nil {
+		return l, h, err // give up
+	}
+	if err := self.Close(); err != nil {
+		return 0, nil, err //is there something more useful to do here?
+	}
+	self.finalName = encodeMetadata(name, l, h)
+	parentF1 := filepath.Dir(self.f1.Name())
+	parentF2 := filepath.Dir(self.f2.Name())
+	parentParity := filepath.Dir(self.parity.Name())
+
+	//rename is pretty cheap in most systems
+	//we are ignoring collisions here because it's both irrelevant and
+	//in a better implementation it would be helpful to "unify" files
+	//with identical content (which is the case here)
+	if err := os.Rename(self.f1.Name(), filepath.Join(parentF1, self.finalName)); err != nil {
+		return 0, nil, err
+	}
+	if err := os.Rename(self.f2.Name(), filepath.Join(parentF2, self.finalName)); err != nil {
+		return 0, nil, err
+	}
+	if err := os.Rename(self.parity.Name(), filepath.Join(parentParity, self.finalName)); err != nil {
+		return 0, nil, err
+	}
+	return l, h, nil
 }
 
 //blockWrite defaults to calling the standard implementation
@@ -160,14 +191,14 @@ func (self *raid5File) blockWrite(data []byte) error {
 }
 
 //hide the length of the file and the md5hash in the name
-func encodeMetadata(name string, len int64, hash []byte) string {
+func encodeMetadata(name string, l int64, hash []byte) string {
 	if strings.Index(name, "$") != -1 {
 		panic("illegal character in filename!")
 	}
 	if name == "" {
 		panic("empty filenames are nonsense")
 	}
-	return fmt.Sprintf("%s$%x$%x", name, len, hash)
+	return fmt.Sprintf("%s$%x$%x", name, l, hash)
 }
 
 //hide the length of the file and the md5hash in the name
