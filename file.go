@@ -2,8 +2,10 @@ package raid5
 
 import (
 	"errors"
+	"hash"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 //Public API to this type is in upper case.
@@ -145,4 +147,15 @@ func (self *raid5File) Write(data []byte) error {
 //blockWrite defaults to calling the standard implementation
 func (self *raid5File) blockWrite(data []byte) error {
 	return self.blockWriter(data)
+}
+
+//hide the length of the file and the md5hash in the name
+func encodeMetadata(name string, len int64, hash []byte) string {
+	if strings.Index(name, "$") != -1 {
+		panic("illegal character in filename!")
+	}
+	if name == "" {
+		panic("empty filenames are nonsense")
+	}
+	return fmt.Sprintf("%s$%x$%x", name, len, hash)
 }

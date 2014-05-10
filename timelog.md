@@ -26,3 +26,4 @@
 * 10:55 realized in shower that need to store the length of the files in the name (easier than putting it in the content)
 * 11:04 got third test passing, added git for safety
 * 11:12 wrote a half a content test in the wrong place, wasted time
+* 11:34 going to try to encode the len and checksum in the name
