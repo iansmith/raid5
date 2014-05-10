@@ -27,3 +27,8 @@
 * 11:04 got third test passing, added git for safety
 * 11:12 wrote a half a content test in the wrong place, wasted time
 * 11:34 going to try to encode the len and checksum in the name
+* 11:57 after building the name encoding thing, I realized that the name
+encoding of the hash means we have to change the name of the file *after
+we have finished writing to it, ugh, ugly.
+* 12:07 on a 32 bit machine, the len() is probably only 32 bits wide! 
+this means we'd be limiting ourselves to 32 bit wide file sizes

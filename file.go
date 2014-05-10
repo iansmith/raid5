@@ -1,10 +1,12 @@
 package raid5
 
 import (
+	"crypto/md5"
 	"errors"
-	"hash"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -15,7 +17,7 @@ type raid5File struct {
 
 	//support for overriding in tests
 	blockWriter func([]byte) error
-	writer      func([]byte) error
+	writer      func([]byte) (int64, []byte, error)
 }
 
 var (
@@ -23,8 +25,9 @@ var (
 )
 
 const (
-	BLOCK_SIZE = 0x10000
-	HALF_BLOCK = BLOCK_SIZE >> 1
+	BLOCK_SIZE           = 0x10000
+	HALF_BLOCK           = BLOCK_SIZE >> 1
+	HASH_LENGTH_IN_ASCII = 32
 )
 
 //create a file. directories are "out of band" information not really
@@ -108,18 +111,25 @@ func (self *raid5File) writeSingleBlock(data []byte) error {
 }
 
 //write any size of data blob, padding the end to fit exactly in the
-//block size
-func (self *raid5File) write(data []byte) error {
+//block size.  note that the extra values returned here are primarily
+//for the code that is renaming the file to encode extra things in the
+//name.
+func (self *raid5File) write(data []byte) (int64, []byte, error) {
 	curr := 0
+	h := md5.New()
+	var mostRecent []byte
+
 	for curr < len(data) {
 		//can we write a whole block?
 		if len(data)-curr > BLOCK_SIZE {
 			if err := self.blockWrite(data[curr : curr+BLOCK_SIZE]); err != nil {
-				return err
+				return 0, nil, err
 			}
+			mostRecent = h.Sum(data[curr : curr+BLOCK_SIZE])
 		} else {
 			//pad with zeros as necessary
 			padding := make([]byte, BLOCK_SIZE)
+			mostRecent = h.Sum(data[curr:]) //hash does not include zeros!
 			for i := 0; i < BLOCK_SIZE; i++ {
 				//if statement not very satisfying as it avoids burstish
 				//writes of zeros but this is easier to reason about correctness
@@ -131,16 +141,16 @@ func (self *raid5File) write(data []byte) error {
 			}
 
 			if err := self.blockWrite(padding); err != nil {
-				return err
+				return 0, nil, err
 			}
 		}
 		curr += BLOCK_SIZE
 	}
-	return nil
+	return int64(len(data)), mostRecent, nil
 }
 
 //write defaults to calling the standard implementation
-func (self *raid5File) Write(data []byte) error {
+func (self *raid5File) Write(data []byte) (int64, []byte, error) {
 	return self.writer(data)
 }
 
@@ -158,4 +168,28 @@ func encodeMetadata(name string, len int64, hash []byte) string {
 		panic("empty filenames are nonsense")
 	}
 	return fmt.Sprintf("%s$%x$%x", name, len, hash)
+}
+
+//hide the length of the file and the md5hash in the name
+func decodeMetadata(name string) (string, int64, []byte) {
+	pieces := strings.Split(name, "$")
+	if len(pieces) != 3 {
+		panic("badly encoded name sent to decode!")
+	}
+	l, err := strconv.ParseInt(pieces[1], 10, 64)
+	if err != nil {
+		panic("badly encoded name sent to decode (base 10 expected for length)")
+	}
+	if len(pieces[2]) != HASH_LENGTH_IN_ASCII {
+		panic("badly encoded name sent to decode (base 16 hash is wrong length)")
+	}
+	h := make([]byte, HASH_LENGTH_IN_ASCII/2)
+	for i := 0; i < len(pieces[2]); i += 2 {
+		b, err := strconv.ParseInt(pieces[2][i:i+2], 16, 64)
+		if err != nil {
+			panic("badly encoded name sent to decode (base 16 hash)")
+		}
+		h[i/2] = byte(b) //yes, this is safe
+	}
+	return pieces[0], l, h
 }

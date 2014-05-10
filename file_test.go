@@ -1,11 +1,12 @@
 package raid5
 
 import (
-	"strings"
+	"fmt"
 	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -248,9 +249,12 @@ func TestUglySizedWrite(t *testing.T) {
 		}
 
 		countCalls = 0
-		err := raid5.Write(data)
+		l, _, err := raid5.Write(data)
 		if err != nil {
 			t.Fatalf("unable to write the data blob: %v", err)
+		}
+		if l != int64(len(data)) {
+			t.Errorf("unexpected write length %d vs %d", l, len(data))
 		}
 		if countCalls != blocks {
 			t.Errorf("wrong number of blocks written (expected %d but got %d) for size %d",
@@ -280,8 +284,12 @@ func TestPaddingContent(t *testing.T) {
 	xorValue := byte(0) ^ content[0]
 
 	//go through the api to create the content
-	if err := result.Write(content); err != nil {
+	l, _, err := result.Write(content)
+	if err != nil {
 		t.Fatalf("write failed: %v", err)
+	}
+	if l != 1 {
+		t.Errorf("wrong size, expecetd 1 but got: %d", l)
 	}
 	if err := result.Close(); err != nil {
 		t.Fatalf("close failed: %v", err)
@@ -331,45 +339,60 @@ func TestRecoverContent(t *testing.T) {
 	defer destroyTestDirs(t, d1, d2, parity)
 
 	name := "heffalumph"
-	result, err := CreateFile(d1, d2, parity, name)
+	_, err := CreateFile(d1, d2, parity, name)
 	if err != nil {
 		t.Fatalf("failed to create files: %v", err)
 	}
 }
 
-var exampleHash = []byte{0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15}
+var exampleHash = []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}
 
 //just to make sure our data never gets corrupted
 func TestDisallowedChars(t *testing.T) {
-	expectPanic("foo$bar",42, exampleHash)
-	expectPanic("",42, exampleHash)
+	expectPanic(t, "foo$bar", 42, exampleHash)
+	expectPanic(t, "", 42, exampleHash)
 }
 
-func expectPanic(proposedName string, length int, hash []byte) {
-	
+func expectPanic(t *testing.T, proposedName string, length int, hash []byte) {
 	defer func() {
-		r:=recover()
-		if r==nil {
-			t.Errorf("expected to get a panic when encoding bad filename %s",name)
+		r := recover()
+		if r == nil {
+			t.Errorf("expected to get a panic when encoding bad filename %s", proposedName)
+		}
+	}()
+	encodeMetadata(proposedName, int64(length), hash)
+}
+
+func TestDecodeValues(t *testing.T) {
+	raw := "fleazil$3413$000102030405060708090a0b0c0d0e0f"
+	n, l, h := decodeMetadata(raw)
+	if n != "fleazil" {
+		t.Errorf("bad name afetr decode: %v", n)
+	}
+	if l != 3413 {
+		t.Errorf("bad length after decode: %d", l)
+	}
+	for i, b := range h {
+		if exampleHash[i] != b {
+			t.Errorf("bad hash byte after decode: %d is %x", i, b)
 		}
 	}
-	encodeMetadata(proposedName, length, hash)
 }
 
 func TestEncodeValues(t *testing.T) {
-	fakeLen = rand.Intn(0xffff)
+	fakeLen := rand.Int63n(0xffff)
 	encoded := encodeMetadata("fleazil", fakeLen, exampleHash)
 	pieces := strings.Split(encoded, "$")
-	if len(pieces)!=3 {
+	if len(pieces) != 3 {
 		t.Fatalf("bad encoding %s", encoded)
 	}
-	if pieces[0]!="fleazil" {
+	if pieces[0] != "fleazil" {
 		t.Errorf("wrong name encoded %s", encoded)
 	}
-	if pieces[1]!=fmt.Sprintf("%x",fakeLen) {
+	if pieces[1] != fmt.Sprintf("%x", fakeLen) {
 		t.Errorf("wrong len encoded %s", encoded)
 	}
-	if pieces[2]!="0123456789abcdef"{
+	if pieces[2] != "000102030405060708090a0b0c0d0e0f" {
 		t.Errorf("wrong hash encoded %s", encoded)
 	}
 }
