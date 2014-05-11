@@ -10,10 +10,6 @@ import (
 	"testing"
 )
 
-const (
-	SPOT_CHECKS = 5
-)
-
 func setupTestDirs(t *testing.T) (string, string, string) {
 	data1, err := ioutil.TempDir("", "raid5")
 	if err != nil {
@@ -31,14 +27,12 @@ func setupTestDirs(t *testing.T) (string, string, string) {
 }
 
 func destroyTestDirs(t *testing.T, data1, data2, parity string) {
-	/*
-		for _, dir := range []string{data1, data2, parity} {
-			err := os.RemoveAll(dir)
-			if err != nil {
-				t.Fatalf("failed to remove dir %s: %v", dir, err)
-			}
+	for _, dir := range []string{data1, data2, parity} {
+		err := os.RemoveAll(dir)
+		if err != nil {
+			t.Fatalf("failed to remove dir %s: %v", dir, err)
 		}
-	*/
+	}
 }
 
 func TestCreateFile(t *testing.T) {
@@ -425,6 +419,20 @@ func TestCantCreateFileTwice(t *testing.T) {
 
 }
 
+func TestOpenFailsOnDoesntExist(t *testing.T) {
+	d1, d2, parity := setupTestDirs(t)
+	defer destroyTestDirs(t, d1, d2, parity)
+
+	name := "fart"
+	_, err := OpenFile(d1, d2, parity, name)
+	if err == nil {
+		t.Fatalf("failed to signal error opening bogus file")
+	}
+	if !os.IsNotExist(err) {
+		t.Errorf("wrong error returned on open: %v", err)
+	}
+
+}
 func TestCanReadFileAfterDelete(t *testing.T) {
 	size := rand.Intn(64)*0xffff + rand.Intn(64) //approx 2^12
 	buffer := make([]byte, size)
@@ -453,7 +461,7 @@ func TestCanReadFileAfterDelete(t *testing.T) {
 		t.Fatalf("could not delete file: %v", err)
 	}
 
-	result, err = Open(d1, d2, parity, name)
+	result, err = OpenFile(d1, d2, parity, name)
 	if err != nil {
 		t.Fatalf("can't find the file we just wrote: %s: %v", name, err)
 	}

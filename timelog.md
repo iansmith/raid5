@@ -54,5 +54,8 @@ the offset makes me think I did something stupid
 * 14:33 again, worrying that the len(foo) is an int not int64
 * 15:07 took a break to hang with wife/dog
 * 15:42 spent a bunch of time debugging something which boiled downed to "if you haven't written the code yet, it won't work"
-
+* 16:09 got reading after destroying underlying data working, time to slap
+an web API
+* 16:34 not checking for somebody sending us REALLY big files, assuming they can be buffered in memory of webserver
+*17:00 end to end testing has revealed that i'm dropping carriage returns or somehow not accepting them properly from curl
 

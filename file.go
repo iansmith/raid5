@@ -4,6 +4,7 @@ import (
 	"crypto/md5"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -28,8 +29,7 @@ type raid5File struct {
 }
 
 var (
-	WRONG_SIZE      = errors.New("we are assuming that writes to a disk always read/write the full set of bytes")
-	NOT_ENOUGH_DATA = errors.New("lost at least two of three parts of the file, can't recover")
+	WRONG_SIZE = errors.New("we are assuming that writes to a disk always read/write the full set of bytes")
 )
 
 const (
@@ -37,6 +37,10 @@ const (
 	HALF_BLOCK           = BLOCK_SIZE >> 1
 	HASH_LENGTH_IN_ASCII = 32
 )
+
+func (self *raid5File) Size() int64 {
+	return self.expectedLen
+}
 
 //create a file. directories are "out of band" information not really
 //part of the public api.  note that this will return an error if the
@@ -259,27 +263,34 @@ func decodeMetadata(name string) (string, int64, []byte) {
 	return pieces[0], l, h
 }
 
-func Open(d1, d2, parity, name string) (*raid5File, error) {
+func OpenFile(d1, d2, parity, name string) (*raid5File, error) {
 	//try to open all three files
-	f1, err1 := os.Open(filepath.Join(d1, name))
-	f2, err2 := os.Open(filepath.Join(d2, name))
-	p, err3 := os.Open(filepath.Join(parity, name))
+	paths := []string{
+		filepath.Join(d1, name),
+		filepath.Join(d2, name),
+		filepath.Join(parity, name),
+	}
+
+	f1, err1 := os.Open(paths[0])
+	f2, err2 := os.Open(paths[1])
+	p, err3 := os.Open(paths[2])
 
 	ct := 0
-	for _, err := range []error{err1, err2, err3} {
+	for i, err := range []error{err1, err2, err3} {
 		if err == nil {
 			ct++
 			continue
 		}
 		if os.IsNotExist(err) {
-			continue // we can maybe tolerate this
+			log.Printf("trying to recover from data missing in %s", paths[i])
+			continue // we can maybe tolerate this error
 		}
 		//not clear: is this an error? if the disk is failing, it seems
 		//like it is, so we error here
 		return nil, err
 	}
 	if ct < 2 {
-		return nil, NOT_ENOUGH_DATA
+		return nil, os.ErrNotExist
 	}
 	//figure out how long the file is and its expected hash, we can use
 	//one of the two parts
