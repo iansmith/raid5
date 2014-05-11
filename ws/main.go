@@ -101,7 +101,7 @@ func main() {
 		os.RemoveAll(parity)
 	}()
 
-	log.Printf("data directories for the server:\n%s\n%s\n%s\n",
+	log.Printf("data directories for the server:\n%s\n%s\n(PARITY %s)\n",
 		data1, data2, parity)
 	log.Fatalf("returned from listen and serve",
 		http.ListenAndServe(":8080", nil))
