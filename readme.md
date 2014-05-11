@@ -1,7 +1,7 @@
 * set your GOPATH to something sensible, like /tmp/iansmith
 * set your PATH to something sensible derived from GOPATH, like /tmp/iansmith/bin
 
-* go get github.com/iansmith/raid5
+* go get github.com/iansmith/raid5/ws
 * go install github.com/iansmith/raid5/ws
 
 * run the webserver with something like `/tmp/iansmith/bin/ws`

@@ -3,12 +3,12 @@ package main
 import (
 	"fmt"
 	"github.com/bmizerany/pat"
+	"github.com/iansmith/raid5"
 	"io"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"raid5"
 )
 
 var (
